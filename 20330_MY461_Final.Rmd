@@ -1,0 +1,384 @@
+---
+title: "20330_MY461_Final"
+author: '20330'
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r message=FALSE, error=FALSE, warning=FALSE}
+library(readr)
+library(igraph)
+library(dplyr)
+library(scales)
+library(knitr)
+library(kableExtra)
+library(tidyr)
+library(ggplot2)
+library(Matrix)
+
+bills <- read.csv("110_billspon.csv",header=TRUE,row.names=1)
+sen<-read_csv("110_sen.csv")
+sen$years<-2007-sen$FirstTookOffice
+
+#Create network
+billsmat<-as.matrix(bills)
+net<-graph.incidence(billsmat)
+
+#Create one mode projection
+full_net<-bipartite.projection(net)
+full_net2<-get.adjacency(full_net$proj2,sparse=FALSE,attr="weight")
+full_network<-graph.adjacency(full_net2, mode="undirected", weighted = TRUE)%>%
+  set.vertex.attribute("party", value=as.factor(sen$Party))%>%
+  set.vertex.attribute("gender", value=sen$Gender)%>%
+  set.vertex.attribute("religion", value=sen$Religion)%>%
+  set.vertex.attribute("class", value=sen$Class)%>%
+  set.vertex.attribute("state", value=as.factor(sen$State))%>%
+  set.vertex.attribute("region", value=sen$CensusRegion)%>%
+  set.vertex.attribute("years", value=sen$years)
+
+#Get edge weights
+weights<-c(E(full_network)$weight)
+
+#Identify 75th percentile
+#summary(weights)
+
+#Create simplified network
+simp_net<- delete.edges(full_network, E(full_network)[weight < 103])
+
+```
+
+## Question 1
+**Consider the overall metrics (density, average path length, transitivity) of both the full and the simplified networks. How do the two networks compare to each other? Compare the simplified network to random networks created with the Erdős–Rényi and the configuration models. What do these comparisons tell you about the nature and structure of the relationships among the senators? In your answer, make sure to define each of the metrics and give an intuitive interpretation for them.**
+
+The full network of co-sponsorships is highly connected since the density, average path length and transitivity are all equal to 1.  The `density` measures the “general level of linkage among the points of a graph”[^1].  A value of 1 means that all senators have at least co-sponsored a bill with all the other senators.  In comparison, the simplified network has a density of 0.25, so only 25% of all the possible links in the network are present.  This means that only a quarter of the senators have a high level of co-sponsorships.
+
+The `transitivity`, also known as the clustering coefficient, means in this network that if a senator `a` co-sponsored a bill with `b`, and `b` co-sponsored with `c`, then `a` and `c` are likely to co-sponsor a bill together. The full network is a completely transitive graph (value of 1), which only occurs in graphs with density equal to 1[^2]. In the simplified version, the clustering coefficient is of 0.76, so there is a 76% chance that senators who have another senator in common with whom the co-sponsored a bill, are themselves connected.  
+
+Moreover, the `average path length` is another measure of network connectivity that gives the average shortest network distance between two vertices[^3].  In this network is the average number of steps each senator takes to reach others.  For the full network, it takes the value of 1, since it’s a fully connected graph, while in the simplified version, it is of 1.85, meaning it takes more than one step on average to connect two legislators. 
+
+```{r message=FALSE, error=FALSE, warning=FALSE}
+kable(data.frame(network= c('Full', 'Simplified'),
+                     density=c(graph.density(full_network), graph.density(simp_net)),
+                    av_path_legth=c(average.path.length(full_network), average.path.length(simp_net)),
+                     transitivity= c(transitivity(full_network), transitivity(simp_net))))%>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "center")
+```
+
+When we compare these three measures of the simplified network the with the Erdos-Renyi (ER) and the configuration models, first we see that the density is similar in all three networks.  The ER model assumes that each node has a fixed probability of forming a link with another, independently. As the number of nodes increases the model assumes that most of the nodes have the same number of connections and that there are no highly connected nodes. This gives us a lower clustering coefficient (`0.24`) than the empirical network (`0.76`).  On the other hand, the configuration model preserves the degree sequence of the empirical network, which gives us a higher clustering coefficient (`0.43`) than the ER model but much lower than the simplified network.  These results make sense since social networks tend to be highly clustered, and random models fail to represent this property.  Moreover, the average path length (apl) of the simplified network is larger than the ER model (which in theory has a short apl), but lower than in the configuration.   
+
+In general, the measures tell us that in the network of senators (simplified version), a high group of senators co-sponsor bills together (high clustering coefficient), and it takes less than two steps to connect two senators (short average path length), which are two properties we expect to find in social networks. While in random networks we find lower clustering coefficients and different path lengths.
+
+
+```{r message=FALSE, error=FALSE, warning=FALSE}
+#Erdos-Renyi
+erdos<-sample_gnp(n=102, p= 0.2533489)
+
+#Configuration
+conf <- sample_degseq(out.deg = degree(simp_net), method = "simple")
+
+#Compare models
+kable(data.frame(network= c('Simplified', 'Erdos-Renyi', 'Configuration'),
+                     density=c(graph.density(simp_net), graph.density(erdos), graph.density(conf)),
+                    av_path_legth=c(average.path.length(simp_net), average.path.length(erdos), average.path.length(conf)),
+                     transitivity= c(transitivity(simp_net), transitivity(erdos), transitivity(conf))))%>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "center")
+  
+```
+
+##Question 2
+
+**Who do you see as the most influential senators in the 110th Congress? Identify two potential meanings of “influence,” as proxied by different centrality measures. Justify your choice of each centrality measure. In that justification, present clear interpretations of what each centrality measure is capturing about the position of senators. For each of your chosen centrality measures, identify the senator who has the highest value in the simplified network. Discuss why you think that senator is the most central in the network. Make explicit reference in your response to the concepts of social capital and brokerage/structural holes covered in the course material.**
+
+In politics, especially when seeking support for a bill, influence might translate into the ability of creating ties with influential legislators or being able to negotiate with people from different parties, and not necessarily with having a lot of connections.  
+
+This first idea can be captured using the eigenvector centrality, that considers that the vertex importance in a network increases by having connections to other important nodes.  “It gives each vertex a score proportional to the sum of the scores of its neighbors”[^4]. In this network, a senator might have a lot of influence not necessarily because it has the highest number of connections, but because it is connected to other important politicians.  
+
+This is linked to the concept of social capital, which relates to the “resources embedded in a social structure which are accessed or mobilized in purposive actions”[^5] or as Burt (2004) states, it exists where people have an advantage because of their location in a social structure. Hillary Clinton, John Kerry and Richard Durbin from the Democratic Party are the senators with the highest eigenvector centrality(`plot1`).   This means that they co-sponsor bills with other well-connected senators, which gives them more power in the network. Both Clinton and Kerry are well known figures in the Democratic party, they served for Obama’s government and Clinton was a presidential candidate.  Durbin was the Majority Whip of the Democrats, a role that tries to ensure party discipline in a legislature[^6], so this would require him to have good connections with other legislators, specially those within his own party. 
+ 
+
+```{r message=FALSE, error=FALSE, warning=FALSE,fig.height = 6, fig.width = 7, fig.align="center"}
+#Centrality measures for the simplified network
+#Degree
+degs<-degree(simp_net)
+
+#Betweenness
+bet<-betweenness(simp_net, weights = 1/E(simp_net)$weight)
+
+#Eigenvector
+eig<-eigen_centrality(simp_net, weights = E(simp_net)$weight)$vector
+
+
+#Dataframe of all the measures
+influence<-data.frame(senator=V(simp_net)$name, 
+                      party=V(simp_net)$party,
+                      deg=degs,
+                      eig=round(eig,4),
+                      betcent=bet)
+
+#Print highest eigenvector
+kable(influence%>%
+  select(-betcent)%>%
+  arrange(desc(eig))%>%
+  top_n(3, eig))%>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "center")
+  
+
+#Make plots
+dlayout <- layout.fruchterman.reingold(full_network)
+#Eigenvector centrality
+set.seed(1)
+V(simp_net)$color<-ifelse(V(simp_net)$party==1, "#3197e0", "#ff4040")
+plot(simp_net,vertex.size=rescale(eig,c(2,10)),edge.width=0.5,layout=dlayout,
+    vertex.label = ifelse(eig > 0.91, V(simp_net)$name, NA),
+    vertex.label.font=2,vertex.label.color="black", vertex.label.cex=0.7)
+ title("Plot 1. Eigenvector centrality")
+```
+
+On the other hand, influence could be seen as the ability to negotiate between different groups.    This can be captured with the betweenness centrality that “measures the extent to which a vertex lies on paths between other vertices”[^7]. The senator with the highest betweenness centrality is the republican Norm Coleman. He has a lot of co-sponsorships with members of his own party and with the Democrats(`Plot2`).  This suggests he might have strategic information useful for seeking support for bills proposed by both parties, and thus acts as a bridge between parties.  If we were to remove Coleman from the network, it would disrupt the communications between other vertices.  This strategic position allows him  to “receive more non-redundant information at any given time”[^8] than other senators, which can give him the “capability of performing better or being perceived as the source of new ideas”[^8].
+
+Moreover, this Congress had a majority of Democrats, thus for passing certain bills it would be key for republicans to have support (before voting) from democrats.  The cosponsor Coleman could give to a Democrat’s bill, could later translate into support for a republican bill.  This relates to one of the Burt’s (2004) brokerage levels about making people aware on both sides of a structural hole, of interests and difficulties in the other group[^9].    However, Coleman, has a low eigenvector centrality, which suggests, that while he might have a strategic position in the network, he is not connected to very influential nodes.  
+ 
+```{r message=FALSE, error=FALSE, warning=FALSE, fig.height = 6, fig.width = 7, fig.align="center"}
+#Print highest betweeness
+kable(influence%>%
+  select(-eig, -deg)%>%
+  arrange(desc(betcent))%>%
+  top_n(3, betcent))%>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "center")
+ 
+#Plot Betweeness
+set.seed(1)
+plot(simp_net,vertex.size=rescale(bet,c(2,10)),edge.width=E(simp_net)$weight/500,layout=dlayout,
+    vertex.label = ifelse(bet > 200, V(simp_net)$name, NA),
+    vertex.label.font=2,vertex.label.color="black", vertex.label.cex=0.7, vertex.label.dist=1)
+title("Plot 2. Betweenness centrality")
+
+```
+
+##Question 3
+**How does political party membership influence bill co-sponsorship? Calculate the assortativity by political party and the probability of a co-sponsorship tie within and between each party (using a blockmodel approach) for the simplified network. Run the Louvain community detection algorithm on the full network and see how the resulting communities align (or not) with political party. Plot the full network twice (with the same layout) with nodes coloured by (1) the results of the community detection algorithm and (2) the vertex attribute which you identify as most closely aligning with the resulting communities (include a figure label). Discuss what the results of these analyses imply about the political parties at this time.**
+
+The assortativity by political party for the simplified network is of 0.33, which suggests that a high number of co-sponsorships occur within parties, however since the value is not that high, senators relate also with members of other parties.  The results of the blockmodel approach suggest that there is a higher probability of ties within the members of the Democrat party (65%) than within the Republican party (12%), or even, between parties, since the values are around 12% (see matrix below).  Moreover, the assortativity of this model is similar to the one found in the original network (0.38 vs 0.33), which shows the model is doing a good job.    These results prove that the legislators with a lot of co-sponsorships are mainly Democrats that support their own peers.  In this Senate, Democrats had the majority with 50 members since two independent senators aligned with Democrats[^10], so the lower interaction we see between Democrats and Republicans, could be to the fact that Democrats didn’t need to negotiate support for some of their bills outside of their own party.   
+
+```{r message=FALSE, error=FALSE, warning=FALSE, fig.align="center"}
+#Assortativity by party
+#assortativity.nominal(simp_net, V(simp_net)$party)
+#Blockmodel
+
+require(intergraph)
+detach(package:igraph)
+require(sna)
+simp_net2<-asNetwork(simp_net) 
+
+simp_bm<-round(blockmodel(simp_net2,ec= as.numeric(simp_net2 %v% "party"), rlabels = c("Democrat", "Republican"))$block.model, 3)
+
+kable(simp_bm)%>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "center")
+
+detach(package:sna)
+detach(package:intergraph)
+require(igraph)
+
+
+g_simp <- sample_sbm(102, pref.matrix=simp_bm, block.sizes=c(51,51), directed=FALSE)
+#assortativity(g_simp,c(rep(1,51),rep(2,51)))
+image(g_simp[])
+```
+
+When analyzing the full network, the Louvain algorithm detects two communities that align pretty well with the political party: 97 senators where correctly classified, and only 4 republicans, were classified as democrats, and 1 democrat as a republican.  The communities do not align well with other network attributes such as gender or religion. In the tables below we see that one of the communities (Democrats) has more females but in the case of religion it is more dispersed among the two identified groups, with Catholics and Jewish senators belonging mainly to the Democratic party.  So party, seems to be the main attribute that segments the communities. 
+
+In `Plot 3`, the black edges represent links within the same party and red edges links between members of different parties.  While there are two distinct groups (Democrats and Republicans) there are a lot of interactions between them.  Also, Democrats seem to have more links within group than Republicans, as we had previously seen in the blockmodel. 
+
+While we know there are two clearly defined political groups in the network, the party membership could not be the only variable that influences the co-sponsorship of a bill, since we see a lot of ties between parties.  In practice, we know parties negotiate so we would expect co-sponsorships to be influenced by other factors such as the state, the topic of the bill, the years of service, or personal values among the legislators.  Nonetheless, when calculating the assortativity by these other variables, the values are really close to zero for the simplified network, and homophily by party is the highest value.  In conclusion, the political party seems to be the biggest determinant that shapes the relationships in this network.  As Craig et al. (2018)[^11] suggest: "Congress is a close-knit and social human institution. As such, we expect to observe tendencies toward intra-group homophily, in which members of a group display a preference for associating with other members of the same group".
+
+```{r message=FALSE, error=FALSE, warning=FALSE, fig.height = 5, fig.width = 6, fig.align="center"}
+#Louvain community detection
+louv <- cluster_louvain(full_network, weights = E(full_network)$weight) 
+
+#Compare results
+compare(V(full_network)$party, louv,method="nmi")
+result<-data.frame(name=louv$names, membership=louv$membership, real_party=V(full_network)$party)
+result<-result%>%
+  mutate(correct=ifelse(membership!=real_party, "Correct", "Incorrect"))
+#By party
+kable(table(V(full_network)$party, membership(louv)), col.names = c("Republican", "Democrat"))%>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+
+kable(table(result$correct), 
+      col.names = c("Classification","Frequency"))%>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+
+#By gender
+kable(table(V(full_network)$gender, membership(louv)), col.names = c("Republican", "Democrat"))%>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+
+#By religion
+kable(table(V(full_network)$religion, membership(louv)), col.names = c("Republican", "Democrat"))%>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+
+
+kable(
+  data.frame(Assortativity=c("party", "gender", "religion", "class", "state", "region", "years"),
+             value=c(assortativity.nominal(simp_net, V(simp_net)$party),
+                     assortativity.nominal(simp_net, as.factor(V(simp_net)$gender)),
+                     assortativity.nominal(simp_net, as.factor(V(simp_net)$religion)),
+                     assortativity.nominal(simp_net, V(simp_net)$class),
+                     assortativity.nominal(simp_net, V(simp_net)$state),
+                     assortativity.nominal(simp_net, V(simp_net)$region),
+                     assortativity(simp_net, V(simp_net)$years))
+             ))%>%kable_styling(bootstrap_options = "striped", full_width = F)
+
+#Plots
+set.seed(1)
+plot(louv, full_network, edge.width = E(full_network)$weight/100, layout=dlayout, 
+     vertex.size=4, vertex.label=NA)
+title("Plot 3. Louvain community detection")
+```
+
+```{r message=FALSE, error=FALSE, warning=FALSE, fig.height = 5, fig.width = 6, fig.align="center"}
+set.seed(1)
+V(full_network)$color<-ifelse(V(full_network)$party==1, "#3197e0", "#ff4040")
+plot(full_network, edge.width = E(full_network)$weight/200, layout=dlayout, 
+     vertex.size=4, vertex.label=NA)
+legend("topleft", c("Democrat", "Republican"), pch=21,
+       col="#777777", pt.bg=c("#3197e0", "#ff4040"), pt.cex=1, cex=.8, bty="n", ncol=1)
+title("Plot 4. Senators co-sponship by party")
+```
+
+##Question 4
+**Do different senators seem to fulfil different roles in the senate? Evaluate the structural equivalency of the senators in the full network and use this to divide the senators into four equivalency classes. Interpret the four groups identified, drawing on information regarding party and leadership. Discuss what this implies about the senators, drawing on the concepts of position and role.**
+
+“Two vertices in a network are structurally equivalent if they share many of the same network neighbors”[^12], which in this network means that legislators support the same bills.  If the senators have a similar co-sponsorship pattern they might have the same position in the network.  To evaluate the structural equivalence of senators, we first calculate how correlated their bill co-sponsorship is, then calculate a measure of dissimilarity and finally cluster the results into 4 structural equivalent groups[^13], which gives us the following results: 
+
+```{r message=FALSE, error=FALSE, warning=FALSE, fig.height = 6, fig.width = 7, fig.align="center"}
+require(NetCluster)
+require(gplots)
+#Calculate the correlation
+cor.mat<-cor(billsmat)
+dis<-as.dist(1-cor.mat,upper=TRUE)
+
+#Dendogram
+billdend<-hclust(dis)
+
+#Segment into 4 equivalency clases
+structure<- data.frame(name=V(full_network)$name, group=cutree(billdend, k=4), party=ifelse(V(full_network)$party==1, "Democrat", "Republican"))
+
+#Calculate total_cosponsorships
+bills2<-bills
+bills2[bills2>1]<-1
+total_co<-bills2%>%
+  gather(senator, total)%>%
+  group_by(senator)%>%
+  summarise(total_cosponsorship=sum(total))
+
+structure<-left_join(structure, total_co, by=c("name"="senator"))
+
+tab<-structure%>%
+  group_by(group)%>%
+  count(party)%>%
+  spread(party, n)
+tab[is.na(tab)]<-0
+
+kable(tab)%>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+
+#Plot
+set.seed(1)
+plot(full_network,edge.width=E(full_network)$weight/200,vertex.color=cutree(billdend, k=4),vertex.size=6,layout=dlayout, vertex.label = ifelse(cutree(billdend, k=4)>2, V(full_network)$name, NA), vertex.label.font=2,vertex.label.color="black", vertex.label.cex=0.6, vertex.label.dist=1)
+title("Plot 5. Hierarchical structure of senators")
+```
+
+In group 4 we have the Democrat Harry Reid, who was the Majority Leader in the 110th Congress, which is the highest-ranking position in Senate and in party leadership.  
+
+In group 3, there are 9 Republicans, that had different positions in party leadership. Mitch McConnell, was the Minotiry Leader, the highest-ranking role of the opposition; Trent Lott was the Minority Whip (second in rank) and Jon Kyl was the Republican Conference Chairman.  Moreover, this group included John McCain who was a prominent figure in the Republican Party, and was running as a presidential candidate.  However, this group includes also senators with a diverse background that did not seem to play a relevant role in the party such as Jim Burnnng (Ranked by Time as one of the worst senators), Tom Coburn, Jim DeMint (a high-ranking member of the Tea Party), John Ensing and Craig Thomas, who died during his time in office.  
+
+The other two groups include the rest of the Republican and Democrat senators, with the exception that 6 Republicans, that have a lot of co-sponsorships with Democrats are in the mainly Democrat group.  For instance, senator Norm Coleman who, as we had previously identified, served as a bridge between democrats and republicans.  
+
+In social networks, individuals normally fulfil different roles that might relate to their personal believes or interests or to the expectations of others regarding that role. In this network, it makes sense to have divisions and roles based on party leaderships and differences between political groups. As Olezek (2018) states: “Senate norms of behavior have long emphasized collegiality and deference to one’s colleagues, and some Senators may view co-sponsorship as the legislative equivalent of a common courtesy”[^14], so we can expect most of the senators of the same party support their colleagues, and that party leaders can be more selective in the bills they support. 
+
+We can conclude that there is a hierarchical structure in Senate were senators seem to fulfil different roles. In `Plot 6`, these divisions are seen more clearly. In the case of the Democrats, there is one identified leader and the rest of the senators group together in similar issues and co-sponsorship patterns, suggesting there is less hierarchy and most of the senators seem to fulfill a similar role.  For the Republicans, there seems to be more segmentation: first a group that includes high party leaders and other senators that are not part of the leadership but have similar co-sponsorships; and a group with the other republican senators.
+
+```{r message=FALSE, error=FALSE, warning=FALSE, fig.align="center"}
+structure%>%
+  filter(group<4)%>%
+  ggplot(aes(x=total_cosponsorship, fill=party))+
+  geom_histogram()+
+  scale_fill_manual(values=c("#3197e0", "#ff4040"))+
+  theme_minimal()+facet_wrap(~group)+
+  scale_x_continuous("Total cosponsorships")+
+  scale_y_continuous("Number of senators")+
+  ggtitle("Plot 6. Total number of cosponsorships by group")+
+  labs(caption="I excluded group 4 since it only has one observation, with 476 cosponsorships")
+```
+
+
+##Question 5
+
+**What helps predict whether senators cosponsor bills? Consider the exponential random graph model for the simplified network shown below. Interpret each term in the ERGM (except edges) – how does each term influence whether or not two senators are connected? In your discussion, make explicit reference to the concepts of homophily and transitivity. Calculate the fitted probability of a tie between: two women from the same region, who joined in the same year, and who have both cosponsored a bill with one other senator; once, when they are both Democrats and once when they are both Republicans.**
+
+The results of the model suggest that party, gender and region, are good predictors of bill co-sponsorship.  More specifically, a Republican senator is 0.3 times more likely (or 70% less likely) to co-sponsor a bill than democrats, holding the other variables constant.  Moreover, senators from the same party are 6.3 times more likely to co-sponsor a bill, than if they are from different parties.  Male senators are 0.33 more likely to cosponsor bills (67% less likely), compared to their female peers.  If senators are from the same gender (weather male or female) they are 1.91 (91%) times more likely to cosponsor a bill and if they are from the same region they are 1.94 times (94%) more likely to cosponsor.  All of these results take into account that we are holding all the other variables in the model constant.
+
+
+```{r message=FALSE, error=FALSE, warning=FALSE}
+#Calculate the base value of the gwesp
+gwesp_base<-(1-exp(-0.6))
+
+results<-data.frame(variable=c("Republican", "Same party", "Male", "Same gender", 
+                        "Same Region", "Year joined (dif)", "GWESP"),
+                    coef=c(1.204, 1.841, -1.110, 0.647, 0.663, -0.007, 3.724),
+             odds_ratio=round(c(exp(-1.204), exp(1.841), exp(-1.110), exp(0.647),
+                        exp(0.663),exp(-0.007), exp(3.724*gwesp_base)), 2))
+results$percent<-(results$odds_ratio-1)*100
+kable(results)%>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position="center")
+```
+
+We found evidence of homophily in the network. It is stronger by party, and then by region and gender. This makes sense since as we had seen in the previous questions, there is a clear division between parties, and a higher likelihood of senators supporting their own colleagues.  In addition, senators from the same regions might have similar views on issues that affect their constituents which will lead them to support similar bills in those topics.  In the case of gender, there are only 16 female senators, 11 of which belong to the Democratic party, so while we find a high homophily by gender, holding other variables constant, this could be affected by the unbalanced categories we have.  
+
+The variable that calculates the absolute difference when senators joined Congress is not statistically significant, but the term suggests that if the senators joined Congress in different years then they are 0.99 times more likely to co-sponsor (1% less likely). Finally the gwesp (geometrically weighted edgewise shared partner) coefficient, is a structural term that captures the triadic closure[^15].  In practice, this would capture how the likelihood of a tie between two senators changes proportionately with the number of shared ties they have.  The results show that senators who have at least one shared tie in common are 5.37[^16] times more likely to cosponsor a bill together.    This suggests that this is a strong factor that shapes the relationships in this network.  If two senators cosponsored a bill with the same senator, then in the future they are more likely to cosponsor together, which makes sense in the legislative arena, since it might be easier to recruit cosponsors if they have a senator in common.  
+
+Finally, two women senators from the same region, who joined the same year, who have both cosponsored a bill with one other senator are predicted to have a tie 12.9% of the time if they are Democrats and 4.25% if they are Republicans[^17].   This reinforces our findings that in general, Democrats are more likely to cosponsor than their political rivals. 
+
+```{r message=FALSE, error=FALSE, warning=FALSE}
+#Fitted probabilities
+estoprob <- function(logit) {
+  round((exp(logit)/(1+exp(logit)))*100, 2)
+}
+
+#2 women, same region, same year, democrats
+eq1<-(-6.742+1.841+0.647+0.663+(3.724*gwesp_base))
+
+#2 women, same region, same year, republicans
+eq2<-(-6.742-1.204+1.841+0.647+0.663+(3.724*gwesp_base))
+
+kable(
+  data.frame(values=c("women, same region, same year, democrats", "women, same region, same year, republicans"),
+             probability=c(estoprob(eq1), 
+                      estoprob(eq2)))
+)%>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position="center")
+```
+
+[^1]: Scott, 2017, p. 69
+[^2]: Newman, 2010
+[^3]: Newman, 2010, p. 34
+[^4]: Newman, 2010
+[^5]: Lin, N. (2001). Building a network theory of social capital. In N. Lin, K. S. Cook, & R. S. Burt (Eds.), Social capital: theory and research (pp. 3–30). New York: Aldine de Gruyter.
+[^6]: https://en.wikipedia.org/wiki/Whip_(politics)
+[^7]: Newman, 2010
+[^8]: Borgatti, S. P., & Halgin, D. S. (2011). On Network Theory. Organization Science, 22(5), 1168–1181.
+[^9]: Burt, R. (2004). Structural Holes and Good Ideas. *American Journal of Sociology*,  110(2), 349-399.
+[^10]: https://en.wikipedia.org/wiki/Members_of_the_110th_United_States_Senate 
+[^11]: Craig, A.; Cranmer, S.; Desmarais, B.; Clark, C. & Moscardelli, V.  (2018).  The Role of Race, Ethnicity, and Gender in the Congressional Cosponsorship Network. arXiv:1512.06141v1 [stat.AP] 18 Dec 2015
+[^12]: Newman, 2010, p. 50
+[^13]: As stated in the instructions, I did not change the values of the original matrix (incidence matrix) to calculate the correlations.  Even though we are not interpreting the values of the different types of cosponsorship, to calculate the structural equivalence the assupmtion is that there are differences in the type of cosponsorships the senators give.  The results would be different if we recode all values to 1.  
+[^14]: Oleszek, M.  (2018).  *Sponsorship and Cosponsorship of Senate Bills*.  Congressional Research Service.  Recovered from: https://fas.org/sgp/crs/misc/98-279.pdf
+[^15]: "Two actors "share" a partner if both have a tie to the same partner, and each shared partner forms a triangle if the original pair are tied. In contrast to the census of triangles or the clustering coefficient (which produce a single measure for the whole network), the shared partner count is taken on each edge (hence the "edgewise"), producing a distribution of counts". Taken from Goodreau, Kitts & Morris.  (2009).  Birds of a Feather, or Friend of a Friend? Using Exponential Random Graph Models toInvestigate Adolescent Social Networks.  *Demography*. 46(1), pp. 103-125
+[^16]: The calculation was made following Harris (2014) approach, where: dGWESP=(1-(e^-alpha)) ^esp.  Taken from: Harris, K.  (2014).   *An Introduction to Exponential Random Graph Modeling*.  Sage.
+[^17]: For Democrats: `estoprob(-6.742+1.841+0.647+0.663+(3.724*(1-(exp(-0.6)))))`; for Republicans: `estoprob(-6.742-1.204+1.841+0.647+0.663+(3.724*(1-(exp(-0.6)))))`.  Where `estoprob<-function(logit){
+  round((exp(logit)/(1+exp(logit)))*100, 2)}`
